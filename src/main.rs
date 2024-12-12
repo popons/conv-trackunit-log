@@ -6,8 +6,9 @@ use clap::Parser;
 use csv;
 use encoding_rs::SHIFT_JIS;
 use encoding_rs_io::DecodeReaderBytesBuilder;
-use env_logger::init as init_logger;
+use env_logger::init as init_env_logger;
 use log::{info, warn};
+use std::env;
 use std::fs::File;
 use std::io::{stdin, stdout, BufReader, BufWriter};
 
@@ -112,8 +113,16 @@ fn conv_time(x: &str) -> Result<NaiveDateTime> {
   Ok(ndt)
 }
 
+fn init_logger() {
+  if env::var("RUST_LOG").is_err() {
+    env::set_var("RUST_LOG", "info");
+  }
+  init_env_logger();
+}
+
 fn main() -> Result<()> {
   init_logger();
+
   info!("Application started.");
 
   let args = Args::parse();
