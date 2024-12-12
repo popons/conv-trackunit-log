@@ -5,12 +5,12 @@ use chrono::{NaiveDate, NaiveDateTime};
 use clap::Parser;
 use csv;
 use encoding_rs::SHIFT_JIS;
-use encoding_rs_io::DecodeReaderBytesBuilder;
+use encoding_rs_io::{DecodeReaderBytes, DecodeReaderBytesBuilder};
 use env_logger::init as init_env_logger;
 use log::{info, warn};
 use std::env;
 use std::fs::File;
-use std::io::{stdin, stdout, BufReader, BufWriter};
+use std::io::{stdin, stdout, BufReader, BufWriter, Read, Write};
 
 /* mod  **************************************************************************************************/
 
@@ -120,39 +120,13 @@ fn init_logger() {
   init_env_logger();
 }
 
-fn main() -> Result<()> {
-  init_logger();
-
-  info!("Application started.");
-
-  let args = Args::parse();
-
-  let input_reader: Box<dyn std::io::Read> = if let Some(input_path) = args.input {
-    Box::new(File::open(input_path)?)
-  } else {
-    Box::new(stdin())
-  };
-
-  let output_writer: Box<dyn std::io::Write> = if let Some(output_path) = args.output {
-    Box::new(File::create(output_path)?)
-  } else {
-    Box::new(stdout())
-  };
-
-  let mut reader = csv::ReaderBuilder::new().has_headers(false).from_reader(
-    DecodeReaderBytesBuilder::new()
-      .encoding(Some(SHIFT_JIS))
-      .build(BufReader::new(input_reader)),
-  );
-
-  let mut writer = csv::WriterBuilder::new()
-    .has_headers(false)
-    .from_writer(BufWriter::new(output_writer));
-
+fn convert_log(
+  reader: &mut csv::Reader<DecodeReaderBytes<BufReader<Box<dyn Read>>, Vec<u8>>>,
+  writer: &mut csv::Writer<BufWriter<Box<dyn Write>>>,
+) -> Result<(), anyhow::Error> {
   let mut is_header = true;
   let mut prev_dt: Option<NaiveDateTime> = None;
-
-  for result in reader.records() {
+  Ok(for result in reader.records() {
     let record = result?;
     let mut fields: Vec<String> = record.iter().map(|s| s.to_string()).collect();
 
@@ -212,9 +186,74 @@ fn main() -> Result<()> {
       .collect();
     let ref_fields: Vec<&[u8]> = encoded_fields.iter().map(|v| v.as_ref()).collect();
     writer.write_record(ref_fields)?;
-  }
+  })
+}
+
+fn make_reader_writer(
+  args: Args,
+) -> Result<
+  (
+    csv::Reader<encoding_rs_io::DecodeReaderBytes<BufReader<Box<dyn Read>>, Vec<u8>>>,
+    csv::Writer<BufWriter<Box<dyn Write>>>,
+  ),
+  anyhow::Error,
+> {
+  let input_reader = make_input_reader(&args)?;
+  let output_writer = make_output_writer(args)?;
+  let reader = make_reader(input_reader);
+  let writer = make_writer(output_writer);
+  Ok((reader, writer))
+}
+
+fn make_writer(output_writer: Box<dyn Write>) -> csv::Writer<BufWriter<Box<dyn Write>>> {
+  let writer = csv::WriterBuilder::new()
+    .has_headers(false)
+    .from_writer(BufWriter::new(output_writer));
+  writer
+}
+
+fn make_reader(
+  input_reader: Box<dyn Read>,
+) -> csv::Reader<encoding_rs_io::DecodeReaderBytes<BufReader<Box<dyn Read>>, Vec<u8>>> {
+  let reader = csv::ReaderBuilder::new().has_headers(false).from_reader(
+    DecodeReaderBytesBuilder::new()
+      .encoding(Some(SHIFT_JIS))
+      .build(BufReader::new(input_reader)),
+  );
+  reader
+}
+
+fn make_output_writer(args: Args) -> Result<Box<dyn Write>, anyhow::Error> {
+  let output_writer: Box<dyn std::io::Write> = if let Some(output_path) = args.output {
+    Box::new(File::create(output_path)?)
+  } else {
+    Box::new(stdout())
+  };
+  Ok(output_writer)
+}
+
+fn make_input_reader(args: &Args) -> Result<Box<dyn Read>, anyhow::Error> {
+  let input_reader: Box<dyn std::io::Read> = if let Some(input_path) = args.input.clone() {
+    Box::new(File::open(input_path)?)
+  } else {
+    Box::new(stdin())
+  };
+  Ok(input_reader)
+}
+
+fn main() -> Result<()> {
+  init_logger();
+
+  info!("Application started.");
+
+  let args = Args::parse();
+
+  let (mut reader, mut writer) = make_reader_writer(args)?;
+
+  convert_log(&mut reader, &mut writer)?;
 
   writer.flush()?;
+
   Ok(())
 }
 
