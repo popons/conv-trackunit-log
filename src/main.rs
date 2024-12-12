@@ -2,8 +2,14 @@
 
 use anyhow::{anyhow, Result};
 use chrono::{NaiveDate, NaiveDateTime};
+use csv;
+use encoding_rs::SHIFT_JIS;
+use encoding_rs_io::DecodeReaderBytesBuilder;
+use encoding_rs_io::EncodingWriter;
 use env_logger::init as init_logger;
 use log::info;
+use std::fs::File;
+use std::io::{BufReader, BufWriter};
 
 /* mod  **************************************************************************************************/
 
@@ -61,7 +67,6 @@ fn conv_time(x: &str) -> Result<NaiveDateTime> {
   let hms = time_split[0]; // "11:28:34"
   let ampm = time_split[1]; // "AM" or "PM"
                             // タイムゾーン "GMT+9" は今回は無視
-                            // 必要ならここでタイムゾーン処理可能（今回はNaiveDateTimeで終了）
 
   let hms_split: Vec<&str> = hms.split(':').collect();
   if hms_split.len() != 3 {
@@ -99,19 +104,8 @@ fn main() -> Result<()> {
   init_logger();
   info!("Application started.");
 
-  // 入力CSV: ShiftJIS想定
-  // 出力CSV: ShiftJIS想定
-  // 下記例では "input.csv" を読み "output.csv" に書き出す例を示します。
-  // 実際のパスは適宜変更してください。
-
   let input_path = "input.csv";
   let output_path = "output.csv";
-
-  // ShiftJIS -> UTF-8 変換用
-  use encoding_rs::SHIFT_JIS;
-  use encoding_rs_io::DecodeReaderBytesBuilder;
-  use std::fs::File;
-  use std::io::{BufReader, BufWriter};
 
   let input_file = File::open(input_path)?;
   let output_file = File::create(output_path)?;
@@ -122,13 +116,10 @@ fn main() -> Result<()> {
       .build(BufReader::new(input_file)),
   );
 
-  let mut writer =
-    csv::WriterBuilder::new()
-      .has_headers(false)
-      .from_writer(encoding_rs_io::EncodeWriter::new(
-        BufWriter::new(output_file),
-        SHIFT_JIS,
-      ));
+  let enc_writer = EncodingWriter::new(SHIFT_JIS, BufWriter::new(output_file));
+  let mut writer = csv::WriterBuilder::new()
+    .has_headers(false)
+    .from_writer(enc_writer);
 
   let mut is_header = true;
   for result in reader.records() {
@@ -169,7 +160,6 @@ mod tests {
   fn test_conv_time() {
     let x = "11/25/24, 11:28:34 AM GMT+9";
     let dt = conv_time(x).unwrap();
-    // conv_timeで得られる期待値を直接指定
     let expected = NaiveDate::from_ymd_opt(2024, 11, 25)
       .unwrap()
       .and_hms_opt(11, 28, 34)
