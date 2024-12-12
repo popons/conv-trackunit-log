@@ -2,13 +2,14 @@
 
 use anyhow::{anyhow, Result};
 use chrono::{NaiveDate, NaiveDateTime};
+use clap::Parser;
 use csv;
 use encoding_rs::SHIFT_JIS;
 use encoding_rs_io::DecodeReaderBytesBuilder;
 use env_logger::init as init_logger;
 use log::info;
 use std::fs::File;
-use std::io::{BufReader, BufWriter};
+use std::io::{stdin, stdout, BufReader, BufWriter};
 
 /* mod  **************************************************************************************************/
 
@@ -21,6 +22,18 @@ use std::io::{BufReader, BufWriter};
 /* enum  *************************************************************************************************/
 
 /* struct  ***********************************************************************************************/
+
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+  /// Input CSV file. If not specified, read from stdin.
+  #[arg(short = 'i', long = "input")]
+  input: Option<String>,
+
+  /// Output CSV file. If not specified, write to stdout.
+  #[arg(short = 'o', long = "output")]
+  output: Option<String>,
+}
 
 /* unsafe impl standard traits  **************************************************************************/
 
@@ -103,24 +116,29 @@ fn main() -> Result<()> {
   init_logger();
   info!("Application started.");
 
-  let input_path = "input.csv";
-  let output_path = "output.csv";
+  let args = Args::parse();
 
-  let input_file = File::open(input_path)?;
-  let output_file = File::create(output_path)?;
+  let input_reader: Box<dyn std::io::Read> = if let Some(input_path) = args.input {
+    Box::new(File::open(input_path)?)
+  } else {
+    Box::new(stdin())
+  };
 
-  // Reader: ShiftJIS -> UTF-8
+  let output_writer: Box<dyn std::io::Write> = if let Some(output_path) = args.output {
+    Box::new(File::create(output_path)?)
+  } else {
+    Box::new(stdout())
+  };
+
   let mut reader = csv::ReaderBuilder::new().has_headers(false).from_reader(
     DecodeReaderBytesBuilder::new()
       .encoding(Some(SHIFT_JIS))
-      .build(BufReader::new(input_file)),
+      .build(BufReader::new(input_reader)),
   );
 
-  // Writerは一旦UTF-8で記述するが、最後にShiftJISへエンコードして書き込むため、
-  // write_record()時にShiftJISへ変換したバイト列を渡す。
   let mut writer = csv::WriterBuilder::new()
     .has_headers(false)
-    .from_writer(BufWriter::new(output_file));
+    .from_writer(BufWriter::new(output_writer));
 
   let mut is_header = true;
   for result in reader.records() {
@@ -128,16 +146,19 @@ fn main() -> Result<()> {
     let mut fields: Vec<String> = record.iter().map(|s| s.to_string()).collect();
 
     if is_header {
-      // ヘッダー行はそのままShiftJISへ変換
+      // ヘッダー行はそのまま出力
+      // UTF-8で処理中だが、特にエンコード変換はしないまま(UTF-8でwrite)
+      // 要件にShiftJIS出力する場合は、この時点でエンコードする必要あり
+      // しかし今回csv::WriterはUTF-8想定なので、ここで変換する
       let encoded_fields: Vec<Vec<u8>> = fields
         .iter()
         .map(|f| {
-          let (enc, _, _) = SHIFT_JIS.encode(&f);
+          let (enc, _, _) = SHIFT_JIS.encode(f);
           enc.into_owned()
         })
         .collect();
-      let ref_fields: Vec<&[u8]> = encoded_fields.iter().map(|v| &v[..]).collect();
-      writer.write_record(&ref_fields)?;
+      let ref_fields: Vec<&[u8]> = encoded_fields.iter().map(|v| v.as_ref()).collect();
+      writer.write_record(ref_fields)?;
       is_header = false;
       continue;
     }
@@ -149,16 +170,16 @@ fn main() -> Result<()> {
       fields[0] = formatted;
     }
 
-    // UTF-8 -> ShiftJIS
+    // 各フィールドをShiftJISエンコード
     let encoded_fields: Vec<Vec<u8>> = fields
       .iter()
       .map(|f| {
-        let (enc, _, _) = SHIFT_JIS.encode(&f);
+        let (enc, _, _) = SHIFT_JIS.encode(f);
         enc.into_owned()
       })
       .collect();
-    let ref_fields: Vec<&[u8]> = encoded_fields.iter().map(|v| &v[..]).collect();
-    writer.write_record(&ref_fields)?;
+    let ref_fields: Vec<&[u8]> = encoded_fields.iter().map(|v| v.as_ref()).collect();
+    writer.write_record(ref_fields)?;
   }
 
   writer.flush()?;
