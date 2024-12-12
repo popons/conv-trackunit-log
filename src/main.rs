@@ -5,7 +5,6 @@ use chrono::{NaiveDate, NaiveDateTime};
 use csv;
 use encoding_rs::SHIFT_JIS;
 use encoding_rs_io::DecodeReaderBytesBuilder;
-use encoding_rs_io::EncodingWriter;
 use env_logger::init as init_logger;
 use log::info;
 use std::fs::File;
@@ -66,7 +65,7 @@ fn conv_time(x: &str) -> Result<NaiveDateTime> {
 
   let hms = time_split[0]; // "11:28:34"
   let ampm = time_split[1]; // "AM" or "PM"
-                            // タイムゾーン "GMT+9" は今回は無視
+                            // "GMT+9"は今回は無視
 
   let hms_split: Vec<&str> = hms.split(':').collect();
   if hms_split.len() != 3 {
@@ -110,16 +109,18 @@ fn main() -> Result<()> {
   let input_file = File::open(input_path)?;
   let output_file = File::create(output_path)?;
 
+  // Reader: ShiftJIS -> UTF-8
   let mut reader = csv::ReaderBuilder::new().has_headers(false).from_reader(
     DecodeReaderBytesBuilder::new()
       .encoding(Some(SHIFT_JIS))
       .build(BufReader::new(input_file)),
   );
 
-  let enc_writer = EncodingWriter::new(SHIFT_JIS, BufWriter::new(output_file));
+  // Writerは一旦UTF-8で記述するが、最後にShiftJISへエンコードして書き込むため、
+  // write_record()時にShiftJISへ変換したバイト列を渡す。
   let mut writer = csv::WriterBuilder::new()
     .has_headers(false)
-    .from_writer(enc_writer);
+    .from_writer(BufWriter::new(output_file));
 
   let mut is_header = true;
   for result in reader.records() {
@@ -127,8 +128,16 @@ fn main() -> Result<()> {
     let mut fields: Vec<String> = record.iter().map(|s| s.to_string()).collect();
 
     if is_header {
-      // ヘッダー行はそのまま出力
-      writer.write_record(&fields)?;
+      // ヘッダー行はそのままShiftJISへ変換
+      let encoded_fields: Vec<Vec<u8>> = fields
+        .iter()
+        .map(|f| {
+          let (enc, _, _) = SHIFT_JIS.encode(&f);
+          enc.into_owned()
+        })
+        .collect();
+      let ref_fields: Vec<&[u8]> = encoded_fields.iter().map(|v| &v[..]).collect();
+      writer.write_record(&ref_fields)?;
       is_header = false;
       continue;
     }
@@ -136,12 +145,20 @@ fn main() -> Result<()> {
     // 1列目が日時
     if let Some(datetime_str) = fields.get(0) {
       let dt = conv_time(datetime_str)?;
-      // Excelで扱いやすい形式: "YYYY/MM/DD HH:MM:SS"
       let formatted = dt.format("%Y/%m/%d %H:%M:%S").to_string();
       fields[0] = formatted;
     }
 
-    writer.write_record(&fields)?;
+    // UTF-8 -> ShiftJIS
+    let encoded_fields: Vec<Vec<u8>> = fields
+      .iter()
+      .map(|f| {
+        let (enc, _, _) = SHIFT_JIS.encode(&f);
+        enc.into_owned()
+      })
+      .collect();
+    let ref_fields: Vec<&[u8]> = encoded_fields.iter().map(|v| &v[..]).collect();
+    writer.write_record(&ref_fields)?;
   }
 
   writer.flush()?;
