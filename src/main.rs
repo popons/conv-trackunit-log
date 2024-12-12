@@ -53,15 +53,15 @@ fn conv_time(x: &str) -> Result<NaiveDateTime> {
   let year: i32 = 2000 + date_split[2].parse::<i32>()?;
 
   // 時刻部分のパース
-  // time_part: "11:28:34 AM GMT+9"
   let time_split: Vec<&str> = time_part.split_whitespace().collect();
   if time_split.len() < 3 {
     return Err(anyhow!("Invalid time format"));
   }
 
   let hms = time_split[0]; // "11:28:34"
-  let ampm = time_split[1]; // "AM"
-  let _tz = time_split[2]; // "GMT+9" (今回は無視)
+  let ampm = time_split[1]; // "AM" or "PM"
+                            // タイムゾーン "GMT+9" は今回は無視
+                            // 必要ならここでタイムゾーン処理可能（今回はNaiveDateTimeで終了）
 
   let hms_split: Vec<&str> = hms.split(':').collect();
   if hms_split.len() != 3 {
@@ -98,6 +98,62 @@ fn conv_time(x: &str) -> Result<NaiveDateTime> {
 fn main() -> Result<()> {
   init_logger();
   info!("Application started.");
+
+  // 入力CSV: ShiftJIS想定
+  // 出力CSV: ShiftJIS想定
+  // 下記例では "input.csv" を読み "output.csv" に書き出す例を示します。
+  // 実際のパスは適宜変更してください。
+
+  let input_path = "input.csv";
+  let output_path = "output.csv";
+
+  // ShiftJIS -> UTF-8 変換用
+  use encoding_rs::SHIFT_JIS;
+  use encoding_rs_io::DecodeReaderBytesBuilder;
+  use std::fs::File;
+  use std::io::{BufReader, BufWriter};
+
+  let input_file = File::open(input_path)?;
+  let output_file = File::create(output_path)?;
+
+  let mut reader = csv::ReaderBuilder::new().has_headers(false).from_reader(
+    DecodeReaderBytesBuilder::new()
+      .encoding(Some(SHIFT_JIS))
+      .build(BufReader::new(input_file)),
+  );
+
+  let mut writer =
+    csv::WriterBuilder::new()
+      .has_headers(false)
+      .from_writer(encoding_rs_io::EncodeWriter::new(
+        BufWriter::new(output_file),
+        SHIFT_JIS,
+      ));
+
+  let mut is_header = true;
+  for result in reader.records() {
+    let record = result?;
+    let mut fields: Vec<String> = record.iter().map(|s| s.to_string()).collect();
+
+    if is_header {
+      // ヘッダー行はそのまま出力
+      writer.write_record(&fields)?;
+      is_header = false;
+      continue;
+    }
+
+    // 1列目が日時
+    if let Some(datetime_str) = fields.get(0) {
+      let dt = conv_time(datetime_str)?;
+      // Excelで扱いやすい形式: "YYYY/MM/DD HH:MM:SS"
+      let formatted = dt.format("%Y/%m/%d %H:%M:%S").to_string();
+      fields[0] = formatted;
+    }
+
+    writer.write_record(&fields)?;
+  }
+
+  writer.flush()?;
   Ok(())
 }
 
