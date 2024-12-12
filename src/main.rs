@@ -113,11 +113,12 @@ mod tests {
   fn test_conv_time() {
     let x = "11/25/24, 11:28:34 AM GMT+9";
     let dt = conv_time(x).unwrap();
-    assert_eq!(
-      dt,
-      NaiveDateTime::parse_from_str("11/25/24, 11:28:34 AM GMT+9", "%m/%d/%y, %I:%M:%S %p GMT%z")
-        .unwrap()
-    );
+    // conv_timeで得られる期待値を直接指定
+    let expected = NaiveDate::from_ymd_opt(2024, 11, 25)
+      .unwrap()
+      .and_hms_opt(11, 28, 34)
+      .unwrap();
+    assert_eq!(dt, expected);
   }
 }
 
