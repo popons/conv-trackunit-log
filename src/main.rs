@@ -7,7 +7,7 @@ use csv;
 use encoding_rs::SHIFT_JIS;
 use encoding_rs_io::DecodeReaderBytesBuilder;
 use env_logger::init as init_logger;
-use log::info;
+use log::{info, warn};
 use std::fs::File;
 use std::io::{stdin, stdout, BufReader, BufWriter};
 
@@ -141,15 +141,14 @@ fn main() -> Result<()> {
     .from_writer(BufWriter::new(output_writer));
 
   let mut is_header = true;
+  let mut prev_dt: Option<NaiveDateTime> = None;
+
   for result in reader.records() {
     let record = result?;
     let mut fields: Vec<String> = record.iter().map(|s| s.to_string()).collect();
 
     if is_header {
       // ヘッダー行はそのまま出力
-      // UTF-8で処理中だが、特にエンコード変換はしないまま(UTF-8でwrite)
-      // 要件にShiftJIS出力する場合は、この時点でエンコードする必要あり
-      // しかし今回csv::WriterはUTF-8想定なので、ここで変換する
       let encoded_fields: Vec<Vec<u8>> = fields
         .iter()
         .map(|f| {
@@ -165,9 +164,33 @@ fn main() -> Result<()> {
 
     // 1列目が日時
     if let Some(datetime_str) = fields.get(0) {
-      let dt = conv_time(datetime_str)?;
+      let dt = match conv_time(datetime_str) {
+        Ok(d) => d,
+        Err(e) => {
+          warn!("Failed to parse datetime '{}': {}", datetime_str, e);
+          continue; // この行はスキップ
+        }
+      };
+
+      // 時系列チェック
+      if let Some(prev) = prev_dt {
+        if dt < prev {
+          // 前の時刻より古い→除外してwarn
+          warn!("Out-of-order record detected ({} < {}), skipping", dt, prev);
+          continue;
+        }
+      }
+
+      // 時系列OK、prev_dt更新
+      prev_dt = Some(dt);
+
       let formatted = dt.format("%Y/%m/%d %H:%M:%S").to_string();
       fields[0] = formatted;
+    } else {
+      // 日付列がない場合→おかしいが、そのまま出力するかスキップするか
+      // 要求にはないが、ここでは一応warnしてスキップ
+      warn!("No datetime field found, skipping this record.");
+      continue;
     }
 
     // 各フィールドをShiftJISエンコード
